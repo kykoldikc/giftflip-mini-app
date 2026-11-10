@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Search,
   RefreshCw,
@@ -10,10 +11,24 @@ import {
   Wallet,
   User,
   Store,
+  Sparkles,
+  Layers,
 } from "lucide-react";
 
 type MarketSource = "MRKT" | "Portals";
 type Tab = "Market" | "Flip" | "Portfolio" | "Profile";
+
+type MarketAttribute = {
+  type?: string;
+  name?: string;
+  trait_type?: string;
+  key?: string;
+  attribute_type?: string;
+  value?: string | number;
+  display_value?: string | number;
+  rarity?: unknown;
+  [key: string]: unknown;
+};
 
 type MarketGift = {
   id: string;
@@ -27,7 +42,7 @@ type MarketGift = {
   image?: string | null;
   source: MarketSource;
   url?: string;
-  attributes?: unknown[];
+  attributes?: MarketAttribute[];
 };
 
 type Opportunity = {
@@ -36,6 +51,12 @@ type Opportunity = {
   discount: number;
   spread: number;
   referenceType: string;
+};
+
+type AttributeInfo = {
+  label: string;
+  value: string;
+  rarity: string | null;
 };
 
 function numberValue(value: unknown): number | null {
@@ -70,7 +91,38 @@ function median(values: number[]): number {
   return sorted[middle];
 }
 
-function getAttributeLabels(attributes: unknown[] = []): string[] {
+function rarityText(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+
+    const candidate =
+      obj.percentage ??
+      obj.percent ??
+      obj.value ??
+      obj.rank ??
+      obj.rarity;
+
+    if (candidate !== undefined && candidate !== null) {
+      return String(candidate);
+    }
+
+    return null;
+  }
+
+  return null;
+}
+
+function getAttributeInfo(
+  attributes: unknown[] = []
+): AttributeInfo[] {
   return attributes
     .filter(
       (item): item is Record<string, unknown> =>
@@ -79,24 +131,34 @@ function getAttributeLabels(attributes: unknown[] = []): string[] {
         !Array.isArray(item)
     )
     .map((item) => {
-      const name =
+      const label = String(
+        item.attribute_type ??
         item.trait_type ??
-        item.name ??
         item.type ??
-        item.key;
+        item.key ??
+        "Атрибут"
+      );
 
       const value =
         item.value ??
-        item.display_value;
+        item.display_value ??
+        item.attribute ??
+        item.name;
 
-      if (name == null || value == null) return "";
+      if (value === undefined || value === null) {
+        return null;
+      }
 
-      return `${String(name)}: ${String(value)}`;
+      return {
+        label,
+        value: String(value),
+        rarity: rarityText(item.rarity),
+      };
     })
-    .filter(Boolean);
+    .filter((item): item is AttributeInfo => item !== null);
 }
 
-export default function App() {
+function App() {
   const [source, setSource] = useState<MarketSource>("Portals");
   const [activeTab, setActiveTab] = useState<Tab>("Market");
   const [search, setSearch] = useState("");
@@ -138,6 +200,9 @@ export default function App() {
               collection: String(
                 gift.collection ?? gift.name ?? "Unknown"
               ),
+              attributes: Array.isArray(gift.attributes)
+                ? gift.attributes
+                : [],
               source,
             }))
             .filter((gift: MarketGift) => gift.price > 0)
@@ -161,9 +226,15 @@ export default function App() {
     const query = search.trim().toLowerCase();
 
     const result = gifts.filter((gift) => {
+      const attributes = getAttributeInfo(gift.attributes)
+        .map((item) => `${item.label} ${item.value}`)
+        .join(" ")
+        .toLowerCase();
+
       return (
         gift.name.toLowerCase().includes(query) ||
-        (gift.collection ?? "").toLowerCase().includes(query)
+        (gift.collection ?? "").toLowerCase().includes(query) ||
+        attributes.includes(query)
       );
     });
 
@@ -194,8 +265,20 @@ export default function App() {
     let missingReference = 0;
     let floorReferences = 0;
     let collectionReferences = 0;
+    let giftsWithAttributes = 0;
+    let giftsWithRarity = 0;
 
     for (const gift of validGifts) {
+      const attributes = getAttributeInfo(gift.attributes);
+
+      if (attributes.length > 0) {
+        giftsWithAttributes++;
+      }
+
+      if (attributes.some((item) => item.rarity !== null)) {
+        giftsWithRarity++;
+      }
+
       let referencePrice: number | null = null;
       let referenceType = "";
 
@@ -256,10 +339,51 @@ export default function App() {
       missingReference,
       floorReferences,
       collectionReferences,
+      giftsWithAttributes,
+      giftsWithRarity,
     };
   }, [gifts]);
 
   const opportunities = scanner.opportunities;
+
+  function renderAttributes(gift: MarketGift) {
+    const attributes = getAttributeInfo(gift.attributes);
+
+    if (attributes.length === 0) {
+      return (
+        <p className="mt-2 text-xs text-gray-500">
+          Дані про атрибути відсутні
+        </p>
+      );
+    }
+
+    return (
+      <div className="mt-3 space-y-2">
+        {attributes.map((attribute, index) => (
+          <div
+            key={`${attribute.label}-${attribute.value}-${index}`}
+            className="rounded-xl border border-white/5 bg-black/20 p-2"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] uppercase tracking-wide text-gray-500">
+                {attribute.label}
+              </span>
+
+              {attribute.rarity !== null && (
+                <span className="rounded-md bg-violet-500/15 px-2 py-1 text-[10px] text-violet-300">
+                  Рідкість: {attribute.rarity}
+                </span>
+              )}
+            </div>
+
+            <p className="mt-1 text-xs font-semibold text-white">
+              {attribute.value}
+            </p>
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#090b12] text-white">
@@ -302,7 +426,7 @@ export default function App() {
                 </h2>
 
                 <p className="mt-2 text-sm text-gray-400">
-                  Аналіз ринку Telegram-подарунків в одному місці.
+                  Аналіз цін, колекцій та рідкісних характеристик.
                 </p>
 
                 <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-2 text-xs text-gray-300">
@@ -325,7 +449,9 @@ export default function App() {
                   className="flex items-center gap-1.5 text-xs text-gray-400"
                 >
                   <ArrowUpDown size={14} />
-                  {sort === "low" ? "Price: low to high" : "Price: high to low"}
+                  {sort === "low"
+                    ? "Price: low to high"
+                    : "Price: high to low"}
                 </button>
               </div>
 
@@ -358,7 +484,7 @@ export default function App() {
                       loadGifts(search);
                     }
                   }}
-                  placeholder="Search gifts or collections"
+                  placeholder="Search gifts, models, backgrounds..."
                   className="min-w-0 flex-1 bg-transparent text-sm outline-none"
                 />
 
@@ -400,54 +526,74 @@ export default function App() {
 
               <div className="grid grid-cols-2 gap-3">
                 {!loading &&
-                  filteredGifts.map((gift) => (
-                    <article
-                      key={gift.id}
-                      className="overflow-hidden rounded-2xl border border-white/10 bg-[#151722]"
-                    >
-                      <div className="flex aspect-square items-center justify-center bg-[#242039]">
-                        {gift.image ? (
-                          <img
-                            src={gift.image}
-                            alt={gift.name}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <Gift
-                            size={42}
-                            className="text-violet-300/40"
-                          />
-                        )}
-                      </div>
+                  filteredGifts.map((gift) => {
+                    const attributes = getAttributeInfo(gift.attributes);
+                    const hasRarity = attributes.some(
+                      (item) => item.rarity !== null
+                    );
 
-                      <div className="p-3">
-                        <h3 className="truncate text-sm font-semibold">
-                          {gift.name}
-                        </h3>
+                    return (
+                      <article
+                        key={gift.id}
+                        className="overflow-hidden rounded-2xl border border-white/10 bg-[#151722]"
+                      >
+                        <div className="relative flex aspect-square items-center justify-center bg-[#242039]">
+                          {gift.image ? (
+                            <img
+                              src={gift.image}
+                              alt={gift.name}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <Gift
+                              size={42}
+                              className="text-violet-300/40"
+                            />
+                          )}
 
-                        <p className="mt-2 text-sm font-bold text-violet-300">
-                          {gift.price} {gift.currency}
-                        </p>
+                          {hasRarity && (
+                            <span className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-violet-600/90 px-2 py-1 text-[10px] font-semibold">
+                              <Sparkles size={11} />
+                              Rarity data
+                            </span>
+                          )}
+                        </div>
 
-                        {gift.number && (
-                          <p className="mt-1 text-xs text-gray-500">
-                            № {gift.number}
+                        <div className="p-3">
+                          <h3 className="truncate text-sm font-semibold">
+                            {gift.name}
+                          </h3>
+
+                          <p className="mt-2 text-sm font-bold text-violet-300">
+                            {gift.price} {gift.currency}
                           </p>
-                        )}
 
-                        {gift.url && (
-                          <a
-                            href={gift.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-2 inline-flex items-center gap-1 text-xs text-violet-300"
-                          >
-                            Open listing <ExternalLink size={13} />
-                          </a>
-                        )}
-                      </div>
-                    </article>
-                  ))}
+                          {gift.number && (
+                            <p className="mt-1 text-xs text-gray-500">
+                              № {gift.number}
+                            </p>
+                          )}
+
+                          {attributes.length > 0 && (
+                            <div className="mt-3 border-t border-white/10 pt-2">
+                              {renderAttributes(gift)}
+                            </div>
+                          )}
+
+                          {gift.url && (
+                            <a
+                              href={gift.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-2 inline-flex items-center gap-1 text-xs text-violet-300"
+                            >
+                              Open listing <ExternalLink size={13} />
+                            </a>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
               </div>
             </section>
           </>
@@ -466,8 +612,7 @@ export default function App() {
               </h2>
 
               <p className="mt-2 text-sm text-gray-400">
-                Сканер шукає лоти, ціна яких помітно нижча за доступний
-                ринковий орієнтир.
+                Порівняння цін та аналіз характеристик подарунків.
               </p>
 
               <button
@@ -509,25 +654,39 @@ export default function App() {
             </div>
 
             <div className="mt-4 rounded-2xl border border-white/10 bg-[#151722] p-4">
-              <h3 className="text-sm font-semibold">
-                Джерела оцінки
-              </h3>
+              <div className="flex items-center gap-2">
+                <Layers size={17} className="text-violet-300" />
+                <h3 className="text-sm font-semibold">
+                  Аналіз характеристик
+                </h3>
+              </div>
 
               <div className="mt-3 flex justify-between text-xs text-gray-400">
-                <span>Floor price</span>
-                <span>{scanner.floorReferences}</span>
+                <span>Лоти з атрибутами</span>
+                <span>{scanner.giftsWithAttributes}</span>
               </div>
 
               <div className="mt-2 flex justify-between text-xs text-gray-400">
-                <span>Медіана оголошень колекції</span>
-                <span>{scanner.collectionReferences}</span>
+                <span>Лоти з даними рідкості</span>
+                <span>{scanner.giftsWithRarity}</span>
+              </div>
+
+              <div className="mt-4 border-t border-white/10 pt-3">
+                <div className="flex justify-between text-xs text-gray-400">
+                  <span>Floor price</span>
+                  <span>{scanner.floorReferences}</span>
+                </div>
+
+                <div className="mt-2 flex justify-between text-xs text-gray-400">
+                  <span>Медіана оголошень колекції</span>
+                  <span>{scanner.collectionReferences}</span>
+                </div>
               </div>
 
               <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-gray-500">
-                Це попередні ринкові сигнали, а не гарантований прибуток.
-                Floor price та медіана оголошень не дорівнюють реальній
-                ціні перепродажу. Для повноцінної оцінки потрібні
-                завершені продажі, комісії та ліквідність.
+                Рідкість атрибутів показується за даними Portals, якщо
+                вони присутні у відповіді API. Floor price та медіана
+                оголошень не є гарантованою ціною перепродажу.
               </p>
             </div>
 
@@ -555,7 +714,7 @@ export default function App() {
                 />
 
                 <h3 className="mt-4 font-semibold">
-                  Поки немає підтверджених сигналів
+                  Поки немає сигналів
                 </h3>
 
                 <p className="mt-2 text-sm text-gray-500">
@@ -627,20 +786,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {getAttributeLabels(item.gift.attributes).length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-1">
-                        {getAttributeLabels(item.gift.attributes).map(
-                          (label) => (
-                            <span
-                              key={label}
-                              className="rounded-lg bg-white/5 px-2 py-1 text-[10px] text-gray-400"
-                            >
-                              {label}
-                            </span>
-                          )
-                        )}
-                      </div>
-                    )}
+                    {renderAttributes(item.gift)}
 
                     {item.gift.url && (
                       <a
@@ -707,7 +853,7 @@ export default function App() {
                 ["Flip", <ScanSearch size={19} />],
                 ["Portfolio", <Wallet size={19} />],
                 ["Profile", <User size={19} />],
-              ] as [Tab, React.ReactNode][]
+              ] as [Tab, ReactNode][]
             ).map(([label, icon]) => (
               <button
                 key={label}
@@ -728,3 +874,5 @@ export default function App() {
     </div>
   );
 }
+
+export default App;
