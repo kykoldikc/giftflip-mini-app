@@ -29,7 +29,7 @@ type MarketResponse = {
 const SOURCES: MarketSource[] = ["MRKT", "Portals"];
 
 export default function App() {
-  const [source, setSource] = useState<MarketSource>("MRKT");
+  const [source, setSource] = useState<MarketSource>("Portals");
   const [search, setSearch] = useState("");
   const [gifts, setGifts] = useState<MarketGift[]>([]);
   const [loading, setLoading] = useState(false);
