@@ -47,7 +47,7 @@ export default function App() {
         sort,
       });
 
-      const response = await fetch(`/api/market/gifts?${params.toString()}`);
+      const response = await fetch(`https://giftflip-api.onrender.com/api/market/gifts?${params.toString()}`);
 
       if (!response.ok) {
         throw new Error("Market API is not connected yet.");
