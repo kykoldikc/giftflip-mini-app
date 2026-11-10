@@ -9,10 +9,8 @@ import {
   TrendingDown,
   ScanSearch,
 } from "lucide-react";
-
 type MarketSource = "MRKT" | "Portals";
 type Tab = "Market" | "Flip" | "Portfolio" | "Profile";
-
 type MarketGift = {
   id: string;
   name: string;
@@ -27,42 +25,26 @@ type MarketGift = {
   url?: string;
   attributes?: unknown[];
 };
-
 type MarketResponse = {
   gifts: MarketGift[];
 };
-
 type Opportunity = {
   gift: MarketGift;
   referencePrice: number;
+  spread: number;
   discount: number;
-  comparableCount: number;
   characteristics: string[];
 };
-
 type ScannerStats = {
   totalListings: number;
-  listingsWithData: number;
-  comparableListings: number;
-  comparedGroups: number;
-  insufficientListings: number;
-  missingDataListings: number;
+  analyzedListings: number;
+  opportunities: number;
+  missingFloor: number;
+  outsideRange: number;
 };
-
 const SOURCES: MarketSource[] = ["MRKT", "Portals"];
-
-function median(values: number[]) {
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-
-  return sorted.length % 2
-    ? sorted[middle]
-    : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
 function getAttributeData(attributes: unknown[]) {
   const result: { name: string; value: string }[] = [];
-
   attributes.forEach((attribute) => {
     if (
       !attribute ||
@@ -71,20 +53,16 @@ function getAttributeData(attributes: unknown[]) {
     ) {
       return;
     }
-
     const item = attribute as Record<string, unknown>;
-
     const name =
       item.trait_type ??
       item.name ??
       item.type ??
       item.key;
-
     const value =
       item.value ??
       item.display_value ??
       item.rarity;
-
     if (name != null && value != null) {
       result.push({
         name: String(name).trim().toLowerCase(),
@@ -92,33 +70,8 @@ function getAttributeData(attributes: unknown[]) {
       });
     }
   });
-
-  return result
-    .filter((item) => item.name && item.value)
-    .sort((a, b) => a.name.localeCompare(b.name));
+  return result.filter((item) => item.name && item.value);
 }
-
-function getGiftSignature(gift: MarketGift) {
-  if (
-    gift.collectionId == null ||
-    String(gift.collectionId).trim() === "" ||
-    !gift.attributes?.length
-  ) {
-    return null;
-  }
-
-  const attributes = getAttributeData(gift.attributes);
-
-  if (attributes.length === 0) {
-    return null;
-  }
-
-  return JSON.stringify({
-    collection: String(gift.collectionId),
-    attributes,
-  });
-}
-
 function getCharacteristicLabels(gift: MarketGift) {
   return getAttributeData(gift.attributes ?? []).map((item) => {
     const names: Record<string, string> = {
@@ -126,13 +79,9 @@ function getCharacteristicLabels(gift: MarketGift) {
       background: "Background",
       symbol: "Symbol",
     };
-
-    const label = names[item.name] ?? item.name;
-
-    return `${label}: ${item.value}`;
+    return `${names[item.name] ?? item.name}: ${item.value}`;
   });
 }
-
 export default function App() {
   const [source, setSource] = useState<MarketSource>("Portals");
   const [activeTab, setActiveTab] = useState<Tab>("Market");
@@ -141,28 +90,22 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [sort, setSort] = useState<"low" | "high">("low");
-
   async function loadGifts() {
     setLoading(true);
     setError("");
-
     try {
       const params = new URLSearchParams({
         source,
         search,
         sort,
       });
-
       const response = await fetch(
         `https://giftflip-api.onrender.com/api/market/gifts?${params.toString()}`
       );
-
       if (!response.ok) {
         throw new Error("Market API error");
       }
-
       const data: MarketResponse = await response.json();
-
       setGifts(Array.isArray(data.gifts) ? data.gifts : []);
     } catch {
       setGifts([]);
@@ -173,14 +116,11 @@ export default function App() {
       setLoading(false);
     }
   }
-
   useEffect(() => {
     loadGifts();
   }, [source, sort]);
-
   const filteredGifts = useMemo(() => {
     const query = search.trim().toLowerCase();
-
     return gifts.filter((gift) => {
       return (
         gift.name.toLowerCase().includes(query) ||
@@ -188,104 +128,78 @@ export default function App() {
       );
     });
   }, [gifts, search]);
-
+  // Аналізуємо кожен подарунок окремо.
+  // Не вимагаємо однакових NFT або однакових характеристик.
   const scannerAnalysis = useMemo(() => {
-    const groups = new Map<string, MarketGift[]>();
-
-    let listingsWithData = 0;
-
+    const results: Opportunity[] = [];
+    let analyzedListings = 0;
+    let missingFloor = 0;
+    let outsideRange = 0;
     gifts.forEach((gift) => {
-      const signature = getGiftSignature(gift);
-
       if (
-        !signature ||
         !Number.isFinite(gift.price) ||
         gift.price <= 0
       ) {
         return;
       }
-
-      listingsWithData++;
-
-      const key = `${signature}:${gift.currency}`;
-
-      if (!groups.has(key)) {
-        groups.set(key, []);
-      }
-
-      groups.get(key)!.push(gift);
-    });
-
-    const results: Opportunity[] = [];
-
-    let comparedGroups = 0;
-    let comparableListings = 0;
-    let insufficientListings = 0;
-
-    groups.forEach((group) => {
-      if (group.length < 3) {
-        insufficientListings += group.length;
+      if (gift.price < 2 || gift.price > 1000) {
+        outsideRange++;
         return;
       }
-
-      comparedGroups++;
-      comparableListings += group.length;
-
-      const referencePrice = median(
-        group.map((gift) => gift.price)
-      );
-
-      group.forEach((gift) => {
-        const discount =
-          ((referencePrice - gift.price) / referencePrice) * 100;
-
-        if (discount >= 10) {
-          results.push({
-            gift,
-            referencePrice,
-            discount,
-            comparableCount: group.length,
-            characteristics: getCharacteristicLabels(gift),
-          });
-        }
-      });
+      if (
+        gift.floorPrice == null ||
+        !Number.isFinite(gift.floorPrice) ||
+        gift.floorPrice <= 0
+      ) {
+        missingFloor++;
+        return;
+      }
+      analyzedListings++;
+      const referencePrice = gift.floorPrice;
+      if (referencePrice <= gift.price) {
+        return;
+      }
+      const spread = referencePrice - gift.price;
+      const discount = (spread / referencePrice) * 100;
+      // Мінімум 10% різниці від floor price.
+      if (discount >= 10) {
+        results.push({
+          gift,
+          referencePrice,
+          spread,
+          discount,
+          characteristics: getCharacteristicLabels(gift),
+        });
+      }
     });
-
     const stats: ScannerStats = {
       totalListings: gifts.length,
-      listingsWithData,
-      comparableListings,
-      comparedGroups,
-      insufficientListings,
-      missingDataListings: gifts.length - listingsWithData,
+      analyzedListings,
+      opportunities: results.length,
+      missingFloor,
+      outsideRange,
     };
-
     return {
       opportunities: results.sort(
-        (a, b) => b.discount - a.discount
+        (a, b) => b.spread - a.spread
       ),
       stats,
     };
   }, [gifts]);
-
   const opportunities = scannerAnalysis.opportunities;
   const stats = scannerAnalysis.stats;
-
   return (
     <div className="min-h-screen bg-[#090b12] text-white">
       <div className="mx-auto min-h-screen max-w-md overflow-hidden pb-24">
-
         <header className="flex items-center justify-between px-5 pb-5 pt-7">
           <div>
             <div className="text-xs font-semibold tracking-[0.25em] text-violet-400">
               TELEGRAM GIFTS
             </div>
-
             <h1 className="mt-1 text-3xl font-black tracking-tight">
               GIFT<span className="text-violet-400">FLIP</span>
             </h1>
           </div>
-
           <button
             onClick={loadGifts}
             disabled={loading}
@@ -298,7 +212,6 @@ export default function App() {
             />
           </button>
         </header>
-
         {activeTab === "Market" && (
           <>
             <section className="px-5">
@@ -307,28 +220,23 @@ export default function App() {
                   <Gift size={17} />
                   Telegram Gift Market
                 </div>
-
                 <h2 className="mt-3 text-2xl font-bold leading-tight">
                   Find your
                   <br />
                   next collectible.
                 </h2>
-
                 <p className="mt-2 max-w-[260px] text-sm leading-5 text-gray-400">
                   Explore collectible gifts from supported marketplaces.
                 </p>
-
                 <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-2 text-xs text-gray-300">
                   <span className="h-2 w-2 rounded-full bg-green-400" />
                   Portals connected
                 </div>
               </div>
             </section>
-
             <section className="mt-6 px-5">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-bold">Marketplace</h2>
-
                 <button
                   onClick={() =>
                     setSort(sort === "low" ? "high" : "low")
@@ -336,13 +244,11 @@ export default function App() {
                   className="flex items-center gap-1.5 text-xs text-gray-400"
                 >
                   <ArrowUpDown size={14} />
-
                   {sort === "low"
                     ? "Price: low to high"
                     : "Price: high to low"}
                 </button>
               </div>
-
               <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-[#151722] p-1">
                 {SOURCES.map((item) => (
                   <button
@@ -359,14 +265,12 @@ export default function App() {
                 ))}
               </div>
             </section>
-
             <section className="mt-5 px-5">
               <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#151722] px-4 py-3">
                 <Search
                   size={18}
                   className="shrink-0 text-gray-500"
                 />
-
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
@@ -376,7 +280,6 @@ export default function App() {
                   placeholder="Search gifts or collections"
                   className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-gray-500"
                 />
-
                 <button
                   onClick={loadGifts}
                   className="text-violet-300"
@@ -386,11 +289,9 @@ export default function App() {
                 </button>
               </div>
             </section>
-
             <section className="mt-6 px-5">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-lg font-bold">Live listings</h2>
-
                 <button
                   onClick={loadGifts}
                   className="flex items-center gap-1 text-xs text-violet-300"
@@ -399,30 +300,25 @@ export default function App() {
                   <RefreshCw size={12} />
                 </button>
               </div>
-
               {loading && (
                 <div className="rounded-3xl border border-white/10 bg-[#12141e] px-5 py-10 text-center">
                   <RefreshCw
                     size={24}
                     className="mx-auto animate-spin text-violet-400"
                   />
-
                   <p className="mt-3 text-sm text-gray-400">
                     Loading marketplace...
                   </p>
                 </div>
               )}
-
               {!loading && error && (
                 <div className="rounded-3xl border border-amber-400/20 bg-amber-400/5 px-5 py-8 text-center">
                   <h3 className="font-semibold">
                     Marketplace connection error
                   </h3>
-
                   <p className="mt-2 text-sm text-gray-400">
                     {error}
                   </p>
-
                   <button
                     onClick={loadGifts}
                     className="mt-5 rounded-xl bg-violet-500 px-5 py-2.5 text-sm font-semibold"
@@ -431,20 +327,17 @@ export default function App() {
                   </button>
                 </div>
               )}
-
               {!loading && !error && filteredGifts.length === 0 && (
                 <div className="rounded-3xl border border-white/10 bg-[#12141e] px-5 py-10 text-center">
                   <Gift
                     size={30}
                     className="mx-auto text-gray-500"
                   />
-
                   <h3 className="mt-4 font-semibold">
                     No listings found
                   </h3>
                 </div>
               )}
-
               {!loading && !error && filteredGifts.length > 0 && (
                 <div className="grid grid-cols-2 gap-3">
                   {filteredGifts.map((gift) => (
@@ -465,34 +358,28 @@ export default function App() {
                             className="text-violet-300/40"
                           />
                         )}
-
                         <span className="absolute left-2 top-2 rounded-lg bg-black/50 px-2 py-1 text-[10px] font-bold">
                           {gift.source}
                         </span>
                       </div>
-
                       <div className="p-3">
                         <h3 className="truncate text-sm font-semibold">
                           {gift.name}
                         </h3>
-
                         {gift.collection && (
                           <p className="mt-1 truncate text-xs text-gray-500">
                             {gift.collection}
                           </p>
                         )}
-
                         <div className="mt-3 flex items-center justify-between">
                           <div>
                             <p className="text-[10px] text-gray-500">
                               Price
                             </p>
-
                             <p className="text-sm font-bold text-violet-300">
                               {gift.price} {gift.currency}
                             </p>
                           </div>
-
                           {gift.url && (
                             <a
                               href={gift.url}
@@ -513,7 +400,6 @@ export default function App() {
             </section>
           </>
         )}
-
         {activeTab === "Flip" && (
           <section className="px-5">
             <div className="rounded-3xl border border-violet-400/20 bg-gradient-to-br from-violet-500/20 to-[#10131d] p-5">
@@ -521,178 +407,121 @@ export default function App() {
                 <ScanSearch size={19} />
                 Flip Scanner
               </div>
-
               <h2 className="mt-3 text-2xl font-bold">
                 Find undervalued gifts.
               </h2>
-
               <p className="mt-2 text-sm leading-5 text-gray-400">
-                Порівнюємо подарунки з однакової колекції та однаковими характеристиками.
+                Аналізуємо кожен подарунок окремо та шукаємо лоти нижче floor price.
               </p>
-
               <div className="mt-4 rounded-xl bg-black/20 p-3 text-xs text-gray-400">
-                Аналізується лише завантажена вибірка Portals. Знижка не є гарантованим прибутком.
+                Діапазон аналізу: 2–1000 TON. Floor price є орієнтиром, а не гарантією продажу.
               </div>
             </div>
-
             <div className="mt-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-bold">
                   Scanner statistics
                 </h2>
-
                 <span className="text-xs text-gray-500">
                   Live analysis
                 </span>
               </div>
-
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div className="rounded-2xl border border-white/10 bg-[#151722] p-4">
                   <p className="text-xs text-gray-400">
                     Total listings
                   </p>
-
                   <p className="mt-2 text-2xl font-bold text-white">
                     {stats.totalListings}
                   </p>
-
                   <p className="mt-1 text-[10px] text-gray-500">
                     Завантажено лотів
                   </p>
                 </div>
-
                 <div className="rounded-2xl border border-white/10 bg-[#151722] p-4">
                   <p className="text-xs text-gray-400">
-                    Comparable listings
+                    Analyzed listings
                   </p>
-
                   <p className="mt-2 text-2xl font-bold text-violet-300">
-                    {stats.comparableListings}
+                    {stats.analyzedListings}
                   </p>
-
                   <p className="mt-1 text-[10px] text-gray-500">
-                    Лоти для порівняння
+                    Лоти з floor price
                   </p>
                 </div>
-
-                <div className="rounded-2xl border border-white/10 bg-[#151722] p-4">
-                  <p className="text-xs text-gray-400">
-                    Compared groups
-                  </p>
-
-                  <p className="mt-2 text-2xl font-bold text-blue-300">
-                    {stats.comparedGroups}
-                  </p>
-
-                  <p className="mt-1 text-[10px] text-gray-500">
-                    Групи з 3+ лотами
-                  </p>
-                </div>
-
                 <div className="rounded-2xl border border-white/10 bg-[#151722] p-4">
                   <p className="text-xs text-gray-400">
                     Potential deals
                   </p>
-
                   <p className="mt-2 text-2xl font-bold text-green-400">
-                    {opportunities.length}
+                    {stats.opportunities}
                   </p>
-
                   <p className="mt-1 text-[10px] text-gray-500">
-                    Знижка від 10%
+                    Різниця від 10%
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-[#151722] p-4">
+                  <p className="text-xs text-gray-400">
+                    Missing floor
+                  </p>
+                  <p className="mt-2 text-2xl font-bold text-amber-300">
+                    {stats.missingFloor}
+                  </p>
+                  <p className="mt-1 text-[10px] text-gray-500">
+                    Без цінового орієнтира
                   </p>
                 </div>
               </div>
             </div>
-
             <div className="mt-5 rounded-2xl border border-white/10 bg-[#151722] p-4">
               <h3 className="text-sm font-semibold">
                 Data quality
               </h3>
-
-              <div className="mt-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-400">
-                    Listings with comparison data
-                  </span>
-
-                  <span className="text-sm font-semibold text-green-300">
-                    {stats.listingsWithData}
-                  </span>
-                </div>
-
-                <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full rounded-full bg-green-400"
-                    style={{
-                      width: `${
-                        stats.totalListings > 0
-                          ? (stats.listingsWithData /
-                              stats.totalListings) *
-                            100
-                          : 0
-                      }%`,
-                    }}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-400">
-                    Not enough comparable listings
-                  </span>
-
-                  <span className="text-sm font-semibold text-amber-300">
-                    {stats.insufficientListings}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-400">
-                    Missing collection or attributes
-                  </span>
-
-                  <span className="text-sm font-semibold text-red-300">
-                    {stats.missingDataListings}
-                  </span>
-                </div>
+              <div className="mt-4 flex items-center justify-between">
+                <span className="text-xs text-gray-400">
+                  Listings outside 2–1000 TON
+                </span>
+                <span className="text-sm font-semibold text-gray-300">
+                  {stats.outsideRange}
+                </span>
               </div>
-
+              <div className="mt-3 flex items-center justify-between">
+                <span className="text-xs text-gray-400">
+                  Listings without floor price
+                </span>
+                <span className="text-sm font-semibold text-amber-300">
+                  {stats.missingFloor}
+                </span>
+              </div>
               <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-gray-500">
-                Лоти без характеристик не можна надійно порівняти. Групи з менш ніж трьома лотами поки не використовуються для пошуку угод.
+                Scanner не вимагає однакових NFT. Для оцінки можливості використовується floor price, але реальний прибуток залежить від ціни продажу, комісій та ліквідності.
               </p>
             </div>
-
             <div className="mt-6 flex items-center justify-between">
               <h2 className="text-lg font-bold">
                 Potential deals
               </h2>
-
               <span className="rounded-full bg-violet-500/15 px-3 py-1 text-xs text-violet-300">
                 {opportunities.length} found
               </span>
             </div>
-
             {loading && (
               <div className="mt-4 rounded-2xl bg-[#151722] p-6 text-center text-sm text-gray-400">
                 Scanning listings...
               </div>
             )}
-
             {!loading && opportunities.length === 0 && (
               <div className="mt-4 rounded-3xl border border-white/10 bg-[#12141e] px-5 py-10 text-center">
                 <ScanSearch
                   size={36}
                   className="mx-auto text-violet-300/50"
                 />
-
                 <h3 className="mt-4 font-semibold">
                   No potential deals yet
                 </h3>
-
                 <p className="mt-2 text-sm leading-5 text-gray-500">
-                  Поки немає лотів, які відповідають умовам пошуку вигідних пропозицій. Перевір статистику вище, щоб побачити причину.
+                  Наразі немає лотів із floor price щонайменше на 10% вищим за ціну оголошення.
                 </p>
-
                 <button
                   onClick={loadGifts}
                   className="mt-5 rounded-xl bg-violet-500 px-5 py-2.5 text-sm font-semibold"
@@ -701,7 +530,6 @@ export default function App() {
                 </button>
               </div>
             )}
-
             {!loading && opportunities.length > 0 && (
               <div className="mt-4 space-y-3">
                 {opportunities.map((item) => (
@@ -726,26 +554,21 @@ export default function App() {
                           </div>
                         )}
                       </div>
-
                       <div className="min-w-0 flex-1">
                         <h3 className="truncate text-sm font-semibold">
                           {item.gift.name}
                         </h3>
-
                         <div className="mt-2 flex items-center gap-1 text-green-400">
                           <TrendingDown size={15} />
-
                           <span className="text-sm font-bold">
-                            {item.discount.toFixed(1)}% below median
+                            {item.discount.toFixed(1)}% below floor
                           </span>
                         </div>
-
                         <p className="mt-1 text-xs text-gray-500">
-                          {item.comparableCount} comparable listings
+                          Потенційна різниця: {item.spread.toFixed(2)} TON
                         </p>
                       </div>
                     </div>
-
                     {item.characteristics.length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         {item.characteristics.map((label) => (
@@ -758,30 +581,25 @@ export default function App() {
                         ))}
                       </div>
                     )}
-
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       <div className="rounded-xl bg-black/20 p-3">
                         <p className="text-[10px] text-gray-500">
                           Listing price
                         </p>
-
                         <p className="mt-1 text-sm font-bold text-green-300">
                           {item.gift.price} {item.gift.currency}
                         </p>
                       </div>
-
                       <div className="rounded-xl bg-black/20 p-3">
                         <p className="text-[10px] text-gray-500">
-                          Sample median
+                          Collection floor
                         </p>
-
                         <p className="mt-1 text-sm font-bold text-white">
                           {item.referencePrice.toFixed(2)}{" "}
                           {item.gift.currency}
                         </p>
                       </div>
                     </div>
-
                     {item.gift.url && (
                       <a
                         href={item.gift.url}
@@ -799,36 +617,30 @@ export default function App() {
             )}
           </section>
         )}
-
         {activeTab === "Portfolio" && (
           <section className="px-5">
             <h2 className="text-2xl font-bold">
               Portfolio
             </h2>
-
             <div className="mt-5 rounded-3xl border border-white/10 bg-[#151722] p-6 text-center">
               <Gift
                 size={35}
                 className="mx-auto text-violet-300/50"
               />
-
               <h3 className="mt-4 font-semibold">
                 Portfolio coming soon
               </h3>
-
               <p className="mt-2 text-sm text-gray-500">
                 Тут з'являться твої подарунки, витрати та результати перепродажів.
               </p>
             </div>
           </section>
         )}
-
         {activeTab === "Profile" && (
           <section className="px-5">
             <h2 className="text-2xl font-bold">
               Profile
             </h2>
-
             <div className="mt-5 rounded-3xl border border-white/10 bg-[#151722] p-6 text-center">
               <p className="text-sm text-gray-400">
                 Налаштування GIFTFLIP з'являться тут.
@@ -836,7 +648,6 @@ export default function App() {
             </div>
           </section>
         )}
-
         <nav className="fixed bottom-0 left-0 right-0 z-20 border-t border-white/10 bg-[#0c0e16]/95 px-3 pb-5 pt-3 backdrop-blur">
           <div className="mx-auto grid max-w-md grid-cols-4">
             {(
@@ -862,7 +673,6 @@ export default function App() {
             ))}
           </div>
         </nav>
-
       </div>
     </div>
   );
