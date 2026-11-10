@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Search,
-  SlidersHorizontal,
   RefreshCw,
   ExternalLink,
   Gift,
   ArrowUpDown,
   TrendingDown,
   ScanSearch,
+  Wallet,
+  User,
+  Store,
 } from "lucide-react";
 
 type MarketSource = "MRKT" | "Portals";
@@ -22,7 +24,7 @@ type MarketGift = {
   price: number;
   floorPrice?: number | null;
   currency: string;
-  image?: string;
+  image?: string | null;
   source: MarketSource;
   url?: string;
   attributes?: unknown[];
@@ -31,12 +33,12 @@ type MarketGift = {
 type Opportunity = {
   gift: MarketGift;
   referencePrice: number;
-  spread: number;
   discount: number;
+  spread: number;
   referenceType: string;
 };
 
-function getNumber(value: unknown): number | null {
+function numberValue(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
@@ -49,12 +51,12 @@ function getNumber(value: unknown): number | null {
   return null;
 }
 
-function getCollectionKey(gift: MarketGift): string {
+function collectionKey(gift: MarketGift): string {
   if (gift.collectionId != null) {
     return `id:${gift.collectionId}`;
   }
 
-  return `name:${(gift.collection || gift.name || "").trim().toLowerCase()}`;
+  return `name:${(gift.collection || gift.name).toLowerCase().trim()}`;
 }
 
 function median(values: number[]): number {
@@ -68,7 +70,7 @@ function median(values: number[]): number {
   return sorted[middle];
 }
 
-function getAttributes(attributes: unknown[] = []): string[] {
+function getAttributeLabels(attributes: unknown[] = []): string[] {
   return attributes
     .filter(
       (item): item is Record<string, unknown> =>
@@ -78,9 +80,14 @@ function getAttributes(attributes: unknown[] = []): string[] {
     )
     .map((item) => {
       const name =
-        item.trait_type ?? item.name ?? item.type ?? item.key;
+        item.trait_type ??
+        item.name ??
+        item.type ??
+        item.key;
+
       const value =
-        item.value ?? item.display_value ?? item.rarity;
+        item.value ??
+        item.display_value;
 
       if (name == null || value == null) return "";
 
@@ -98,16 +105,16 @@ export default function App() {
   const [error, setError] = useState("");
   const [sort, setSort] = useState<"low" | "high">("low");
 
-  async function loadGifts() {
+  async function loadGifts(searchValue = search) {
     setLoading(true);
     setError("");
 
     try {
-      const params = new URLSearchParams({
-        source,
-        search,
-        sort,
-      });
+      const params = new URLSearchParams({ source });
+
+      if (searchValue.trim()) {
+        params.set("search", searchValue.trim());
+      }
 
       const response = await fetch(
         `https://giftflip-api.onrender.com/api/market/gifts?${params.toString()}`
@@ -125,12 +132,12 @@ export default function App() {
               ...gift,
               id: String(gift.id ?? ""),
               name: String(gift.name ?? "Telegram Gift"),
-              price: getNumber(gift.price) ?? 0,
-              floorPrice: getNumber(gift.floorPrice),
+              price: numberValue(gift.price) ?? 0,
+              floorPrice: numberValue(gift.floorPrice),
               currency: String(gift.currency ?? "UNKNOWN"),
-              collection: gift.collection
-                ? String(gift.collection)
-                : String(gift.name ?? ""),
+              collection: String(
+                gift.collection ?? gift.name ?? "Unknown"
+              ),
               source,
             }))
             .filter((gift: MarketGift) => gift.price > 0)
@@ -147,58 +154,68 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadGifts();
-  }, [source, sort]);
+    loadGifts("");
+  }, [source]);
 
   const filteredGifts = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return gifts.filter((gift) => {
+    const result = gifts.filter((gift) => {
       return (
         gift.name.toLowerCase().includes(query) ||
         (gift.collection ?? "").toLowerCase().includes(query)
       );
     });
-  }, [gifts, search]);
+
+    return result.sort((a, b) =>
+      sort === "low"
+        ? a.price - b.price
+        : b.price - a.price
+    );
+  }, [gifts, search, sort]);
 
   const scanner = useMemo(() => {
     const validGifts = gifts.filter(
-      (gift) => Number.isFinite(gift.price) && gift.price > 0
+      (gift) => gift.price > 0 && Number.isFinite(gift.price)
     );
 
-    const collectionPrices = new Map<string, number[]>();
+    const collections = new Map<string, MarketGift[]>();
 
-    validGifts.forEach((gift) => {
-      const key = getCollectionKey(gift);
-      const current = collectionPrices.get(key) ?? [];
-      current.push(gift.price);
-      collectionPrices.set(key, current);
-    });
+    for (const gift of validGifts) {
+      const key = collectionKey(gift);
+      const current = collections.get(key) ?? [];
+      current.push(gift);
+      collections.set(key, current);
+    }
 
     const opportunities: Opportunity[] = [];
+
     let analyzed = 0;
     let missingReference = 0;
     let floorReferences = 0;
     let collectionReferences = 0;
 
-    validGifts.forEach((gift) => {
+    for (const gift of validGifts) {
       let referencePrice: number | null = null;
       let referenceType = "";
 
       if (
         gift.floorPrice != null &&
-        Number.isFinite(gift.floorPrice) &&
-        gift.floorPrice > 0
+        gift.floorPrice > 0 &&
+        Number.isFinite(gift.floorPrice)
       ) {
         referencePrice = gift.floorPrice;
         referenceType = "Floor price";
         floorReferences++;
       } else {
-        const prices = collectionPrices.get(getCollectionKey(gift)) ?? [];
+        const comparable = (collections.get(collectionKey(gift)) ?? [])
+          .filter((other) => other.id !== gift.id)
+          .map((other) => other.price)
+          .filter((price) => price > 0);
 
-        if (prices.length >= 2) {
-          referencePrice = median(prices);
-          referenceType = "Collection median";
+        if (comparable.length >= 3) {
+          referencePrice = median(comparable);
+          referenceType = "Collection listing median";
           collectionReferences++;
         }
       }
@@ -209,26 +226,26 @@ export default function App() {
         referencePrice <= 0
       ) {
         missingReference++;
-        return;
+        continue;
       }
 
       analyzed++;
 
-      if (referencePrice <= gift.price) return;
+      if (referencePrice <= gift.price) continue;
 
       const spread = referencePrice - gift.price;
       const discount = (spread / referencePrice) * 100;
 
-      if (discount >= 8) {
+      if (discount >= 15) {
         opportunities.push({
           gift,
           referencePrice,
-          spread,
           discount,
+          spread,
           referenceType,
         });
       }
-    });
+    }
 
     return {
       opportunities: opportunities.sort(
@@ -247,18 +264,20 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#090b12] text-white">
       <div className="mx-auto min-h-screen max-w-md overflow-hidden pb-24">
+
         <header className="flex items-center justify-between px-5 pb-5 pt-7">
           <div>
             <div className="text-xs font-semibold tracking-[0.25em] text-violet-400">
               TELEGRAM GIFTS
             </div>
+
             <h1 className="mt-1 text-3xl font-black tracking-tight">
               GIFT<span className="text-violet-400">FLIP</span>
             </h1>
           </div>
 
           <button
-            onClick={loadGifts}
+            onClick={() => loadGifts()}
             disabled={loading}
             className="rounded-2xl border border-white/10 bg-white/5 p-3 text-violet-300"
           >
@@ -279,16 +298,18 @@ export default function App() {
                 </div>
 
                 <h2 className="mt-3 text-2xl font-bold">
-                  Find your next collectible.
+                  Discover collectible gifts.
                 </h2>
 
                 <p className="mt-2 text-sm text-gray-400">
-                  Explore gifts from supported marketplaces.
+                  Аналіз ринку Telegram-подарунків в одному місці.
                 </p>
 
                 <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-2 text-xs text-gray-300">
                   <span className="h-2 w-2 rounded-full bg-green-400" />
-                  Portals connected
+                  {source === "Portals"
+                    ? "Portals market"
+                    : "MRKT not connected"}
                 </div>
               </div>
             </section>
@@ -333,20 +354,31 @@ export default function App() {
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") loadGifts();
+                    if (event.key === "Enter") {
+                      loadGifts(search);
+                    }
                   }}
                   placeholder="Search gifts or collections"
                   className="min-w-0 flex-1 bg-transparent text-sm outline-none"
                 />
 
-                <button onClick={loadGifts} className="text-violet-300">
-                  <SlidersHorizontal size={18} />
+                <button
+                  onClick={() => loadGifts(search)}
+                  className="text-violet-300"
+                >
+                  <Search size={18} />
                 </button>
               </div>
             </section>
 
             <section className="mt-6 px-5">
-              <h2 className="mb-3 text-lg font-bold">Live listings</h2>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-lg font-bold">Live listings</h2>
+
+                <span className="text-xs text-gray-500">
+                  {filteredGifts.length} gifts
+                </span>
+              </div>
 
               {loading && (
                 <p className="py-8 text-center text-sm text-gray-400">
@@ -381,7 +413,10 @@ export default function App() {
                             className="h-full w-full object-cover"
                           />
                         ) : (
-                          <Gift size={42} className="text-violet-300/40" />
+                          <Gift
+                            size={42}
+                            className="text-violet-300/40"
+                          />
                         )}
                       </div>
 
@@ -393,6 +428,12 @@ export default function App() {
                         <p className="mt-2 text-sm font-bold text-violet-300">
                           {gift.price} {gift.currency}
                         </p>
+
+                        {gift.number && (
+                          <p className="mt-1 text-xs text-gray-500">
+                            № {gift.number}
+                          </p>
+                        )}
 
                         {gift.url && (
                           <a
@@ -425,12 +466,12 @@ export default function App() {
               </h2>
 
               <p className="mt-2 text-sm text-gray-400">
-                Аналізуємо подарунки за floor price або цінами інших лотів
-                тієї самої колекції.
+                Сканер шукає лоти, ціна яких помітно нижча за доступний
+                ринковий орієнтир.
               </p>
 
               <button
-                onClick={loadGifts}
+                onClick={() => loadGifts()}
                 disabled={loading}
                 className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-500 py-3 text-sm font-bold"
               >
@@ -443,13 +484,15 @@ export default function App() {
             </div>
 
             <div className="mt-6">
-              <h2 className="text-lg font-bold">Scanner statistics</h2>
+              <h2 className="text-lg font-bold">
+                Scanner statistics
+              </h2>
 
               <div className="mt-3 grid grid-cols-2 gap-3">
                 {[
                   ["Усього лотів", scanner.total],
                   ["Оцінено лотів", scanner.analyzed],
-                  ["Потенційні угоди", opportunities.length],
+                  ["Потенційні сигнали", opportunities.length],
                   ["Без орієнтира", scanner.missingReference],
                 ].map(([label, value]) => (
                   <div
@@ -466,7 +509,9 @@ export default function App() {
             </div>
 
             <div className="mt-4 rounded-2xl border border-white/10 bg-[#151722] p-4">
-              <h3 className="text-sm font-semibold">Джерела оцінки</h3>
+              <h3 className="text-sm font-semibold">
+                Джерела оцінки
+              </h3>
 
               <div className="mt-3 flex justify-between text-xs text-gray-400">
                 <span>Floor price</span>
@@ -474,19 +519,23 @@ export default function App() {
               </div>
 
               <div className="mt-2 flex justify-between text-xs text-gray-400">
-                <span>Медіана колекції</span>
+                <span>Медіана оголошень колекції</span>
                 <span>{scanner.collectionReferences}</span>
               </div>
 
               <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-gray-500">
-                Це попередня оцінка, а не гарантований прибуток. Медіана
-                оголошень не дорівнює реальній ціні продажу. Для точнішого
-                аналізу потрібні завершені продажі, комісії та ліквідність.
+                Це попередні ринкові сигнали, а не гарантований прибуток.
+                Floor price та медіана оголошень не дорівнюють реальній
+                ціні перепродажу. Для повноцінної оцінки потрібні
+                завершені продажі, комісії та ліквідність.
               </p>
             </div>
 
             <div className="mt-6 flex items-center justify-between">
-              <h2 className="text-lg font-bold">Potential deals</h2>
+              <h2 className="text-lg font-bold">
+                Potential deals
+              </h2>
+
               <span className="rounded-full bg-violet-500/15 px-3 py-1 text-xs text-violet-300">
                 {opportunities.length} found
               </span>
@@ -510,8 +559,8 @@ export default function App() {
                 </h3>
 
                 <p className="mt-2 text-sm text-gray-500">
-                  Сканер не буде вигадувати прибуток, якщо даних для
-                  порівняння недостатньо.
+                  Сканер не вигадує угоди, якщо даних для порівняння
+                  недостатньо.
                 </p>
               </div>
             )}
@@ -552,7 +601,7 @@ export default function App() {
                         </p>
 
                         <p className="mt-1 text-[10px] text-gray-500">
-                          Порівняння: {item.referenceType}
+                          {item.referenceType}
                         </p>
                       </div>
                     </div>
@@ -578,16 +627,18 @@ export default function App() {
                       </div>
                     </div>
 
-                    {getAttributes(item.gift.attributes).length > 0 && (
+                    {getAttributeLabels(item.gift.attributes).length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-1">
-                        {getAttributes(item.gift.attributes).map((label) => (
-                          <span
-                            key={label}
-                            className="rounded-lg bg-white/5 px-2 py-1 text-[10px] text-gray-400"
-                          >
-                            {label}
-                          </span>
-                        ))}
+                        {getAttributeLabels(item.gift.attributes).map(
+                          (label) => (
+                            <span
+                              key={label}
+                              className="rounded-lg bg-white/5 px-2 py-1 text-[10px] text-gray-400"
+                            >
+                              {label}
+                            </span>
+                          )
+                        )}
                       </div>
                     )}
 
@@ -610,13 +661,21 @@ export default function App() {
 
         {activeTab === "Portfolio" && (
           <section className="px-5">
-            <h2 className="text-2xl font-bold">Portfolio</h2>
+            <div className="flex items-center gap-2">
+              <Wallet className="text-violet-300" />
+              <h2 className="text-2xl font-bold">Portfolio</h2>
+            </div>
+
             <div className="mt-5 rounded-3xl border border-white/10 bg-[#151722] p-6 text-center">
               <Gift
                 size={35}
                 className="mx-auto text-violet-300/50"
               />
-              <h3 className="mt-4 font-semibold">Portfolio coming soon</h3>
+
+              <h3 className="mt-4 font-semibold">
+                Portfolio coming soon
+              </h3>
+
               <p className="mt-2 text-sm text-gray-500">
                 Тут з'являться твої подарунки, витрати та результати
                 перепродажів.
@@ -627,7 +686,11 @@ export default function App() {
 
         {activeTab === "Profile" && (
           <section className="px-5">
-            <h2 className="text-2xl font-bold">Profile</h2>
+            <div className="flex items-center gap-2">
+              <User className="text-violet-300" />
+              <h2 className="text-2xl font-bold">Profile</h2>
+            </div>
+
             <div className="mt-5 rounded-3xl border border-white/10 bg-[#151722] p-6 text-center">
               <p className="text-sm text-gray-400">
                 Налаштування GIFTFLIP з'являться тут.
@@ -640,11 +703,11 @@ export default function App() {
           <div className="mx-auto grid max-w-md grid-cols-4">
             {(
               [
-                ["Market", "🛍"],
-                ["Flip", "🎁"],
-                ["Portfolio", "💎"],
-                ["Profile", "👤"],
-              ] as [Tab, string][]
+                ["Market", <Store size={19} />],
+                ["Flip", <ScanSearch size={19} />],
+                ["Portfolio", <Wallet size={19} />],
+                ["Profile", <User size={19} />],
+              ] as [Tab, React.ReactNode][]
             ).map(([label, icon]) => (
               <button
                 key={label}
@@ -655,7 +718,7 @@ export default function App() {
                     : "text-gray-500"
                 }`}
               >
-                <span className="text-lg">{icon}</span>
+                {icon}
                 {label}
               </button>
             ))}
