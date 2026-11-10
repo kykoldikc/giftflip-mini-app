@@ -107,22 +107,33 @@ const server = http.createServer(async (req, res) => {
         }));
       }
 
-      const gifts = (data.results || [])
-        .filter(gift =>
-          gift.status === "listed" &&
-          gift.price !== null &&
-          gift.price !== undefined
-        )
-        .map(gift => ({
-          id: String(gift.id),
-          name: gift.name,
-          collection: gift.name,
-          price: Number(gift.price),
-          currency: "GRAM",
-          image: gift.photo_url || undefined,
-          source: "Portals"
-        }));
-
+     const gifts = (data.results || [])
+  .filter(gift =>
+    gift.status === "listed" &&
+    gift.price !== null &&
+    gift.price !== undefined
+  )
+  .map(gift => ({
+    id: String(gift.id),
+    name: gift.name,
+    collection: gift.name,
+    collectionId: gift.collection_id || null,
+    number: gift.external_collection_number || null,
+    price: Number(gift.price),
+    floorPrice: gift.floor_price
+      ? Number(gift.floor_price)
+      : null,
+    currency: "GRAM",
+    image: gift.photo_url || undefined,
+    attributes: Array.isArray(gift.attributes)
+      ? gift.attributes
+      : [],
+    source: "Portals",
+    status: gift.status,
+    listedAt: gift.listed_at || null,
+    unlocksAt: gift.unlocks_at || null,
+    telegramId: gift.tg_id || null
+  })); 
       res.writeHead(200, {
         "Content-Type": "application/json"
       });
