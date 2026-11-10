@@ -1,5 +1,5 @@
-const http = require("http");
-const { URL } = require("url");
+import http from "node:http";
+import { URL } from "node:url";
 
 const PORT = process.env.PORT || 3001;
 
@@ -31,9 +31,8 @@ const server = http.createServer((req, res) => {
     requestUrl.pathname === "/api/market/gifts"
   ) {
     const source = requestUrl.searchParams.get("source");
-    const allowedSources = ["MRKT", "Portals"];
 
-    if (!allowedSources.includes(source)) {
+    if (!["MRKT", "Portals"].includes(source)) {
       res.writeHead(400, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({
         error: "Invalid market source"
