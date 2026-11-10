@@ -74,7 +74,6 @@ const server = http.createServer(async (req, res) => {
       const params = new URLSearchParams();
 
       params.set("status", "listed");
-      params.set("limit", "50");
 
       const search = requestUrl.searchParams.get("search");
 
@@ -84,32 +83,107 @@ const server = http.createServer(async (req, res) => {
 
       const allResults = [];
 
-for (let offset = 0; offset < 200; offset += 50) {
-  const pageParams = new URLSearchParams(params);
+      for (let offset = 0; offset < 200; offset += 50) {
+        const pageParams = new URLSearchParams(params);
 
-  pageParams.set("limit", "50");
-  pageParams.set("offset", String(offset));
+        pageParams.set("limit", "50");
+        pageParams.set("offset", String(offset));
 
-  const response = await fetch(
-    `https://portal-market.com/partners/nfts/search?${pageParams}`,
-    {
-      headers: {
-        Authorization: `partners ${apiKey}`
+        const response = await fetch(
+          `https://portal-market.com/partners/nfts/search?${pageParams}`,
+          {
+            headers: {
+              Authorization: `partners ${apiKey}`
+            }
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          console.error("Portals API error:", response.status, data);
+
+          res.writeHead(response.status, {
+            "Content-Type": "application/json"
+          });
+
+          return res.end(JSON.stringify({
+            error: "Portals API request failed",
+            status: response.status,
+            message: data.message || "Unknown API error"
+          }));
+        }
+
+        const results = data.results || [];
+
+        allResults.push(...results);
+
+        if (results.length < 50) {
+          break;
+        }
       }
+
+      const gifts = allResults
+        .filter(gift =>
+          gift.status === "listed" &&
+          gift.price !== null &&
+          gift.price !== undefined
+        )
+        .map(gift => ({
+          id: String(gift.id),
+          name: gift.name,
+          collection: gift.name,
+          collectionId: gift.collection_id || null,
+          number: gift.external_collection_number || null,
+          price: Number(gift.price),
+          floorPrice: gift.floor_price
+            ? Number(gift.floor_price)
+            : null,
+          currency: "GRAM",
+          image: gift.photo_url || undefined,
+          attributes: Array.isArray(gift.attributes)
+            ? gift.attributes
+            : [],
+          source: "Portals",
+          status: gift.status,
+          listedAt: gift.listed_at || null,
+          unlocksAt: gift.unlocks_at || null,
+          telegramId: gift.tg_id || null
+        }));
+
+      res.writeHead(200, {
+        "Content-Type": "application/json"
+      });
+
+      return res.end(JSON.stringify({
+        source: "Portals",
+        gifts,
+        connected: true,
+        total: gifts.length
+      }));
+
+    } catch (error) {
+      console.error("Portals connection error:", error);
+
+      res.writeHead(502, {
+        "Content-Type": "application/json"
+      });
+
+      return res.end(JSON.stringify({
+        error: "Could not connect to Portals"
+      }));
     }
-  );
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error("Portals API request failed");
   }
 
-  const results = data.results || [];
+  res.writeHead(404, {
+    "Content-Type": "application/json"
+  });
 
-  allResults.push(...results);
+  res.end(JSON.stringify({
+    error: "Not found"
+  }));
+});
 
-  if (results.length < 50) {
-    break;
-  }
-}
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`GIFTFLIP API running on port ${PORT}`);
+});
