@@ -74,6 +74,7 @@ const server = http.createServer(async (req, res) => {
       const params = new URLSearchParams();
 
       params.set("status", "listed");
+      params.set("limit", "50");
 
       const search = requestUrl.searchParams.get("search");
 
@@ -81,49 +82,32 @@ const server = http.createServer(async (req, res) => {
         params.set("search", search);
       }
 
-      const allResults = [];
-
-      for (let offset = 0; offset < 200; offset += 50) {
-        const pageParams = new URLSearchParams(params);
-
-        pageParams.set("limit", "50");
-        pageParams.set("offset", String(offset));
-
-        const response = await fetch(
-          `https://portal-market.com/partners/nfts/search?${pageParams}`,
-          {
-            headers: {
-              Authorization: `partners ${apiKey}`
-            }
+      const response = await fetch(
+        `https://portal-market.com/partners/nfts/search?${params}`,
+        {
+          headers: {
+            Authorization: `partners ${apiKey}`
           }
-        );
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          console.error("Portals API error:", response.status, data);
-
-          res.writeHead(response.status, {
-            "Content-Type": "application/json"
-          });
-
-          return res.end(JSON.stringify({
-            error: "Portals API request failed",
-            status: response.status,
-            message: data.message || "Unknown API error"
-          }));
         }
+      );
 
-        const results = data.results || [];
+      const data = await response.json();
 
-        allResults.push(...results);
+      if (!response.ok) {
+        console.error("Portals API error:", response.status, data);
 
-        if (results.length < 50) {
-          break;
-        }
+        res.writeHead(response.status, {
+          "Content-Type": "application/json"
+        });
+
+        return res.end(JSON.stringify({
+          error: "Portals API request failed",
+          status: response.status,
+          message: data.message || "Unknown API error"
+        }));
       }
 
-      const gifts = allResults
+      const gifts = (data.results || [])
         .filter(gift =>
           gift.status === "listed" &&
           gift.price !== null &&
